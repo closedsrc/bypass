@@ -1,0 +1,55 @@
+# Build output
+android/app/build/
+android/build/
+android/.gradle/
+android/.kotlin/
+frontend/node_modules/
+frontend/dist/
+*.exe
+*.apk
+*.aab
+
+# Signing material: never publish these
+android/keystore/
+android/keystore.properties
+android/local.properties
+
+# The user's own proxy profile and anything derived from it. These carry live
+# proxy credentials, so they stay local.
+augmented.yaml
+filtered.yaml
+profile.yaml
+test_bad.yaml
+*.yaml.tmp
+
+# Verification scratch: logs, screenshots, UI dumps, extracted artifacts
+*.log
+soak_run.log
+soak_out.txt
+strict_out.txt
+*_out.txt
+log_*.txt
+*_logcat.txt
+full_log.txt
+clash*.txt
+jni_strings.txt
+core_*.go.txt
+lib.go.txt
+b64.txt
+ui*.png
+ui*.xml
+shot.png
+launcher.png
+icon_crop.png
+launch.xml
+tmpaar/
+upstream/
+.zcode/
+
+# Windows engine binaries are fetched, not committed (see README)
+engines/
+mihomo.exe
+simplevpn.exe
+
+# JVM heap dumps can contain in-memory secrets
+*.hprof
