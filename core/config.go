@@ -59,20 +59,6 @@ func (c Config) Eligible() []Proxy {
 	return out
 }
 
-func (c Config) FilteredYAML() ([]byte, error) {
-	eligible := c.Eligible()
-	if len(eligible) == 0 {
-		return nil, fmt.Errorf("all configured proxies are USA nodes")
-	}
-	doc := map[string]any{"proxies": make([]map[string]any, 0, len(eligible))}
-	items := doc["proxies"].([]map[string]any)
-	for _, p := range eligible {
-		items = append(items, p.Raw)
-	}
-	doc["proxies"] = items
-	return yaml.Marshal(doc)
-}
-
 func Choose(eligible []Proxy, failed map[string]bool, cursor *int) (Proxy, error) {
 	if len(eligible) == 0 {
 		return Proxy{}, fmt.Errorf("no eligible proxies")

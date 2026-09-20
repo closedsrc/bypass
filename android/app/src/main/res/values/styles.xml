@@ -1,10 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Compose draws the whole UI; this theme only governs the window chrome. It is
+         day/night aware (see values-night/) so the status bar, navigation bar and the
+         window background follow the system instead of forcing a light slab. -->
     <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#F0455F</item>
-        <item name="android:windowBackground">#E9E1FA</item>
-        <item name="android:statusBarColor">#E9E1FA</item>
-        <item name="android:navigationBarColor">#E9E1FA</item>
+        <item name="android:colorAccent">#4A3FD6</item>
+        <item name="android:windowBackground">#FAFAFC</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>

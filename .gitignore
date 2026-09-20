@@ -28,6 +28,10 @@ soak_run.log
 soak_out.txt
 strict_out.txt
 *_out.txt
+# Screenshots and previews from driving the emulator: scratch, and large.
+audit_shots/
+previews/
+__pycache__/
 log_*.txt
 *_logcat.txt
 full_log.txt

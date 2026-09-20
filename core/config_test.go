@@ -42,8 +42,8 @@ func TestAllUSAIsBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cfg.FilteredYAML(); err == nil {
-		t.Fatal("expected empty eligible pool error")
+	if len(cfg.Eligible()) != 0 {
+		t.Fatal("expected empty eligible pool")
 	}
 }
 

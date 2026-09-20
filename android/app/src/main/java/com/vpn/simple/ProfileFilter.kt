@@ -37,6 +37,8 @@ object ProfileFilter {
             val name = nameOf(lines, entry) ?: continue
             if (isUsaNode(name)) removed.add(name) else kept.add(name)
         }
+        // A pool that is entirely US has nothing Bypass may use, so it refuses rather
+        // than quietly sending traffic out of a US exit node.
         if (kept.isEmpty()) throw IllegalStateException("Every proxy in this profile is a USA node")
 
         // -- 2. drop the USA entries --------------------------------------------------
@@ -213,14 +215,28 @@ object ProfileFilter {
         lines.addAll(at, groupEntry(entryPad, nodes))
     }
 
+    /**
+     * The group every connection ends up on.
+     *
+     * `lazy: false` is the point of it. mihomo's default only health-checks a node when a
+     * connection lands on it, so with a pool this size the first request to a dead node
+     * discovers it by timing out. Checking up front and on a timer means a node that stops
+     * answering leaves the rotation before it is dialled, and comes back once it answers
+     * again. `max-failed-times: 1` drops a node after a single failed check rather than
+     * letting it fail live traffic twice more first.
+     */
     private fun groupEntry(pad: String, nodes: List<String>): List<String> {
         val inner = pad + "  "
         return buildList {
             add("$pad- name: $GROUP_NAME")
             add("${inner}type: load-balance")
             add("${inner}strategy: round-robin")
+            add("${inner}lazy: false")
             add("${inner}url: http://www.gstatic.com/generate_204")
-            add("${inner}interval: 300")
+            add("${inner}interval: 30")
+            add("${inner}timeout: 4000")
+            add("${inner}expected-status: 204")
+            add("${inner}max-failed-times: 1")
             add("${inner}proxies:")
             for (node in nodes) add("$inner  - \"${node.replace("\"", "\\\"")}\"")
         }

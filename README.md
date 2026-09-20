@@ -6,24 +6,36 @@ Bypass is a thin, opinionated client for a Clash-compatible subscription. You im
 a profile once, then the whole interface is a single switch: on routes your traffic
 through the profile, off releases it. No node lists, no charts, no invented metrics.
 
-The Android app is the working, verified deliverable. The Windows shell is a small
-control service around the same filter and is honest about its limits (below).
+Both platforms are working deliverables. Android uses `VpnService` for the tunnel; Windows
+runs the same filter against a bundled mihomo core in TUN mode and ships a native
+single-switch tray app (details and honest limits below).
 
 ## What it actually does
 
-- **Load-balances across every usable node.** Traffic is sent to a generated
-  `SimpleVPN` group (`type: load-balance`, round-robin) rebuilt from the profile's own
-  proxies.
+- **Load-balances across the nodes that answer.** Traffic goes to a generated `SimpleVPN`
+  group (`type: load-balance`, round-robin) rebuilt from the profile's own proxies. The group
+  is built with `lazy: false`, a 30 s check interval, a 4 s timeout and
+  `max-failed-times: 1`, so every node is probed before it is used and a node that stops
+  answering leaves the rotation on the next check instead of being discovered by a request
+  timing out on it. Nodes that come back rejoin automatically.
 - **Excludes US nodes.** Proxies named `US`, `USA`, `U.S.`, `United States` or
   `America` are removed, groups lose the references to them, any group that ends up
   empty is dropped, and rules that pointed at removed nodes or groups are re-pointed
   at the generated group. Whole-word matching, so `Just Fast`, `Russia` and
   `Australia` survive.
+
+If every proxy in a profile is a US node, it refuses to start rather than quietly
+sending traffic somewhere you did not choose.
 - **Keeps the profile's routing.** Your `DOMAIN-SUFFIX`, `GEOIP`, `GEOSITE` and
   `DIRECT` rules keep their order and meaning; only the catch-all `MATCH` rule is
   re-pointed at the generated group.
 - **Rewrites on lines, not on a YAML model,** so comments, key order and formatting
   in your profile come through untouched.
+- **Leaves the apps you exclude alone.** Tick an app and it keeps using the device's own
+  connection while the tunnel carries everything else — split tunnelling, for the apps
+  that break behind a proxy or that need to stay on the local network. On Android those
+  apps are kept out of the VPN interface entirely; on Windows they get a `PROCESS-NAME`
+  rule ahead of every other rule in the profile.
 
 If every proxy in a profile is a US node, it refuses to start rather than quietly
 sending traffic somewhere you did not choose.
@@ -35,8 +47,12 @@ sending traffic somewhere you did not choose.
 | `android/` | The Android app (Kotlin, `VpnService`, mihomo over JNI). |
 | `android/app/src/main/java/com/vpn/simple/ProfileFilter.kt` | The profile rewriter described above, covered by unit tests. |
 | `android/app/src/main/java/com/vpn/simple/SimpleVpnService.kt` | Tunnel lifecycle: setup, TUN start, teardown, superseded commands. |
-| `core/`, `cmd/` | The Go core (config parsing, filtering, HTTP control API) and its Windows host. |
-| `frontend/` | The Windows shell's single-screen web UI. |
+| `android/app/src/main/java/com/vpn/simple/AppExclusions.kt` | The set of packages kept out of the tunnel, stored in app-private preferences. |
+| `android/app/src/main/java/com/vpn/simple/ExcludedAppsActivity.kt` | The excluded-apps screen: every installed app, tick or untick. |
+| `core/exclusions.go` | The Go equivalent: the exclusion set, its persistence, and the `PROCESS-NAME` rules it injects. |
+| `core/`, `cmd/vpnapp` | The Go core: line-based filter (mirrors `ProfileFilter.kt`), TUN runtime config, mihomo lifecycle and HTTP control API; `cmd/vpnapp` is its headless host. |
+| `cmd/desktop` | The native Windows client: a Fyne single-switch window that minimises to the system tray and drives `core` in-process. |
+| `frontend/` | A lightweight web control UI (single switch) that can be pointed at the `cmd/vpnapp` API; the shipped Windows client does not depend on it. |
 | `tools/` | Icon generator and the emulator import helper. |
 | `playtest*.py` | The emulator verification harness. |
 
@@ -48,6 +64,15 @@ sending traffic somewhere you did not choose.
 - Gradle 8.9 (the project has no wrapper; any 8.9 install works).
 - `android/local.properties` with `sdk.dir=<your SDK path>`.
 
+**Use JDK 17.** Gradle picks up whatever `JAVA_HOME` points at, and on a JDK 21 install
+the build dies in `compileDebugJavaWithJavac` — `jlink` cannot transform
+`core-for-system-modules.jar`. Setting `JAVA_HOME` to a JDK 17 install fixes it:
+
+```bash
+JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-17.0.19.10-hotspot" \
+  gradle assembleDebug
+```
+
 The mihomo AAR is committed at `android/app/libs/libmihomo-android-v0.3.1.aar`
 (39 MB, all three ABIs), so no extra download is needed.
 
@@ -57,7 +82,7 @@ The mihomo AAR is committed at `android/app/libs/libmihomo-android-v0.3.1.aar`
 cd android
 gradle assembleDebug      # debug APK
 gradle assembleRelease    # minified, resource-shrunk, R8-processed
-gradle testDebugUnitTest  # 15 unit tests for the profile filter
+gradle testDebugUnitTest  # 16 unit tests for the profile filter
 ```
 
 The release build is signed from `android/keystore.properties`, which is **not** in
@@ -91,15 +116,31 @@ fetch cannot complete, the app gives up after two minutes and reports it rather 
 sitting on "Connecting..." forever; tapping the switch during that window cancels
 immediately.
 
+### Excluded apps (split tunnelling)
+
+The **Excluded apps** button under the switch opens the installed apps. Anything you tick
+is passed to `addDisallowedApplication` when the VPN interface is built, so that app never
+enters the tunnel at all: Android hands it straight to the device's own network, and its
+traffic is untouched by the profile. Everything else still goes through the filtered route.
+
+The set lives in app-private preferences and is read fresh every time the tunnel is built,
+so a change made while connected rebuilds the interface straight away. Bypass itself is
+not offered — excluding the app that owns the tunnel would leave it carrying nothing.
+
+An excluded app is kept out of the VPN interface entirely, so Android routes it over the
+device's own network: `ip rule show` while connected shows every UID range except the
+excluded app's pointed at `tun0`, and that app's UID appearing in no `tun0` rule at all.
+Unticking it puts its UID back inside the range.
+
 ## Verification
 
 The filter has unit tests; the app itself was verified on an Android 15 emulator by
 driving the real UI.
 
-- `gradle testDebugUnitTest` — 15 tests covering US removal, group reference pruning,
+- `gradle testDebugUnitTest` — 16 tests covering US removal, group reference pruning,
   emptied-group dropping, rule re-pointing, inline `proxies: [...]` lists,
   provider-backed groups, the generated group's contents, absence of duplicate
-  top-level keys, and the all-US pool refusal.
+  top-level keys, the all-US-pool refusal, and the health-check knobs on the group.
 - `tools/import_profile.py <profile.yaml>` — imports a profile through the system file
   picker and connects, exactly as a user would.
 - `playtest_soak.py` — six connect/disconnect cycles, three impatient taps, leaving
@@ -108,38 +149,100 @@ driving the real UI.
   proxying (`match Match using SimpleVPN[...]` in the log) with nodes answering health
   checks.
 
-Recorded run:
+Two runs, both on a MuMu Android 15 instance (1080x1920, landscape):
 
 ```
-=== A. soak: 6 connect/disconnect cycles ===
-  cycle 1 connect            tun=['tun0']  agents=1  UI='Connected'
-     internet via tunnel: OK
-     proxied flows: 6   nodes alive: 162   failed dials: 0
-  cycle 2 disconnect         tun=none  agents=0  UI='Disconnected'
-     direct internet: OK
-  ... cycles 3-6 alternate correctly ...
-=== B. impatient tapping ===  after 3 fast taps -> Connected; settled -> Disconnected
-=== C. leave app while connected, come back ===  tunnel and traffic preserved
-=== D. final cleanup + crash scan ===  no tunnel left, no crashes, no ANRs
-PASS: soak, impatient taps and reopen all behaved; traffic verified; no crashes.
+=== soak: 3 connect/disconnect cycles ===
+cycle 1 CONNECT tun=True ping=True ok=0 failed=0 alive=36
+cycle 2 CONNECT tun=True ping=True ok=0 failed=0 alive=28
+cycle 3 CONNECT tun=True ping=True ok=0 failed=0 alive=3
+   (disconnect each cycle: tun=False)
+crashes: 0   ANR: 0
 ```
+
+`failed=0` is the number that matters: before the group was health-checked, the same
+profile produced `dial SimpleVPN ... error: context deadline exceeded` whenever
+round-robin handed a request to one of the ~180 dead nodes in the pool.
+
+Excluded apps were checked by A/B. With Otherworld Drive (`com.dfc.mobile`, UID 10061)
+excluded, `ip rule show` lists `uidrange 2001-10060` and `uidrange 10062-20060` for
+`tun0` — 10061 is in neither, so it goes out over `wlan0`. Unticking it puts 10061 inside
+`uidrange 2001-99999`, so it goes through the tunnel.
 
 The scripts use constants at the top (`ADB`, `DEV`) for the adb path and the emulator
 address; point them at your own device.
 
-## Windows shell
+## Windows
 
-`cmd/vpnapp` runs a local control API on `127.0.0.1:38991`, serves the web UI from
-`frontend/`, and can start a bundled `mihomo` with the filtered profile.
+The Windows client is the same filter and routing model as Android, driving a bundled
+`mihomo` core in **TUN mode** so traffic really is routed system-wide.
 
-**Limits, stated plainly:** it does not configure the Windows system proxy and does
-not create a TUN adapter, so nothing is routed automatically. Traffic only reaches a
-proxy if the imported profile defines a local mixed/socks port and you point apps at
-it. The Go core is exercised by `go test ./...`.
+- `core/` parses and filters the profile with a **line-based rewriter that mirrors
+  `ProfileFilter.kt`** — it drops USA nodes, prunes the groups' references to them, drops
+  groups left empty, injects the `SimpleVPN` load-balance group, re-points rules and the
+  catch-all, and adds a `dns:` block only if the profile has none. Covered by the Go
+  equivalent of the Kotlin unit tests (`go test ./...`).
+- `PrepareRuntime` then adds the pieces a working tunnel needs: a `tun:` block (Wintun
+  adapter, `auto-route`, `dns-hijack any:53`) and a localhost `external-controller`.
+- The engine is launched over that config and the app **only reports Connected once the
+  control endpoint answers** (`/version`), so the state is real, not optimistic. If the
+  tunnel can't form, mihomo's own output is surfaced.
 
-Run it with `go run ./cmd/vpnapp`. The Windows engine binary is not committed; put a
-`mihomo` build next to the executable (or take one from
-<https://github.com/MetaCubeX/mihomo/releases>).
+### Excluded apps (split tunnelling)
+
+Windows has no API that lists process names which are not currently running, so the
+picker is built from three sources: the processes running now, everything seen on earlier
+visits (remembered under `%AppData%\Bypass\known-apps.json`, capped at 500 names), and
+anything already excluded — so an app you have not launched today is still there to tick.
+
+**Excluded apps** on the main window (and on the tray menu) opens that picker. Ticking an app injects `PROCESS-NAME,<app>,DIRECT` at the top of the profile's
+rules — ahead of the user's `GEOIP`/`GEOSITE` rules and the catch-all — so it is matched
+before anything can send it into the tunnel. Names typed without `.exe` are given both
+spellings, because that is what mihomo sees on Windows. The list is saved under
+`%AppData%\Bypass\exclusions.json`, and changing it while connected restarts the tunnel so
+the change takes effect now rather than at the next connect.
+
+`find-process-mode: strict` is added to the runtime config for this: without process
+lookup mihomo cannot name the app behind a connection, and those rules would never match.
+
+One honest difference from Android: `dns-hijack any:53` still applies to the whole system,
+so an excluded app's DNS is answered by mihomo (a fake IP) and only then dialled directly.
+That works — mihomo maps the fake IP back to the domain — but the app's name lookups do
+pass through the core, which is worth knowing if an app with its own resolver misbehaves.
+
+### Two runtime requirements (not enforced in code)
+
+1. **Run elevated.** Creating a Wintun adapter and rewriting the system route table needs
+   administrator privileges.
+2. **`wintun.dll` next to `mihomo.exe`.** The Windows engine binary and the Wintun driver
+   are not committed. Get mihomo from <https://github.com/MetaCubeX/mihomo/releases> and
+   Wintun from <https://www.wintun.net>, then place both beside the executable. The app
+   checks and says so plainly if either is missing.
+
+### Run
+
+```bash
+go run ./cmd/vpnapp      # headless control service on 127.0.0.1:38991
+
+# native single-switch tray app (needs the cgo/MinGW toolchain):
+go build -ldflags "-H windowsgui" -o dist/bypass-desktop.exe ./cmd/desktop
+```
+
+`cmd/desktop` is a native Fyne window that reproduces the Android single switch (the orb,
+the state line, connect/disconnect, and an "Import profile" picker), and **minimises to
+the system tray** — closing the window hides it; the tray menu offers Open / Connect–
+Disconnect / Quit.
+
+**Honest caveat:** the filter, the runtime-config generation and the connected-state
+detection are unit- and integration-tested. The privileged parts — Windows actually
+creating the Wintun adapter and carrying live traffic — were not exercised in an
+automated run (they need an elevated desktop session and a real subscription) and are
+verified the same way the Android build was: by driving the app by hand. The same goes
+for per-app exclusion on Windows: the generated `PROCESS-NAME` rules are covered by tests,
+but whether a live excluded app's traffic really leaves untouched needs that elevated
+session. It is a rule-based exclusion, so it depends on mihomo resolving the process
+behind each connection; the Android build, which keeps the app out of the interface
+altogether, is the stronger guarantee of the two.
 
 ## Notes for anyone embedding libmihomo-android
 

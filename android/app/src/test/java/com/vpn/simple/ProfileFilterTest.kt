@@ -104,6 +104,20 @@ class ProfileFilterTest {
     }
 
     @Test
+    fun `the group health checks up front so dead nodes are not dialled`() {
+        val group = ProfileFilter.apply(profile).yaml.substringAfter("- name: SimpleVPN")
+
+        // lazy defaults to true, which only tests a node once traffic lands on it — the
+        // first request to a dead node then fails by timeout.
+        assertTrue("must check nodes before they are used", group.contains("lazy: false"))
+        assertTrue("must re-check on a timer", Regex("interval: \\d+").containsMatchIn(group))
+        assertTrue("must give up on a node fast", Regex("timeout: \\d+").containsMatchIn(group))
+        assertTrue("must drop a node after a failed check", Regex("max-failed-times: \\d+").containsMatchIn(group))
+        val interval = Regex("interval: (\\d+)").find(group)!!.groupValues[1].toInt()
+        assertTrue("300s is too slow to notice a node dying", interval <= 60)
+    }
+
+    @Test
     fun `user rules keep their order and their targets`() {
         val out = ProfileFilter.apply(profile).yaml
         val kept = lines(out).filter { it.trimStart().startsWith("- ") && it.contains(",") }
